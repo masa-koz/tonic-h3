@@ -4,6 +4,8 @@ mod client_conn;
 pub mod executor;
 #[cfg(feature = "msquic")]
 pub mod msquic;
+#[cfg(feature = "msquic-async")]
+pub mod msquic_async;
 #[cfg(feature = "quinn")]
 pub mod quinn;
 pub mod server;

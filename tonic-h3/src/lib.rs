@@ -47,6 +47,11 @@ pub mod msquic {
     pub use h3_util::msquic::*;
 }
 
+#[cfg(feature = "msquic-async")]
+pub mod msquic_async {
+    pub use h3_util::msquic_async::*;
+}
+
 #[cfg(feature = "s2n-quic")]
 pub mod s2n {
     pub use h3_util::s2n::*;

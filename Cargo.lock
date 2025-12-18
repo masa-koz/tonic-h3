@@ -1097,6 +1097,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "h3-msquic-async"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e3ec148e5dca863aff5d6a881454136001b9b40dfb6f6cbed796303338b95cd"
+dependencies = [
+ "bytes",
+ "futures",
+ "h3",
+ "msquic-async",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "h3-quinn"
 version = "0.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1117,6 +1131,7 @@ dependencies = [
  "bytes",
  "futures",
  "h3",
+ "h3-msquic-async",
  "h3-quinn",
  "hyper",
  "hyper-util",
@@ -1690,9 +1705,26 @@ checksum = "bea65fda5241a20053862abd4fc4e8ce92a08b5471a3ce26714d02fe42ebd6f6"
 dependencies = [
  "bitflags",
  "c-types",
+ "cmake",
  "ctor",
  "libc",
  "socket2 0.5.10",
+]
+
+[[package]]
+name = "msquic-async"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c94beeb6b379ea73fc33b554003390119a5a1c93b1958f54088c248de6bf3d14"
+dependencies = [
+ "bytes",
+ "futures-io",
+ "libc",
+ "msquic",
+ "rangemap",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2442,6 +2474,12 @@ checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
 dependencies = [
  "rand_core 0.9.3",
 ]
+
+[[package]]
+name = "rangemap"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acbbbbea733ec66275512d0b9694f34102e7d5406fdbe2ad8d21b28dce92887c"
 
 [[package]]
 name = "raw-cpuid"

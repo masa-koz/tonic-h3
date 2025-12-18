@@ -15,6 +15,7 @@ readme = "../README.md"
 default = []
 quinn = ["h3-util/quinn"]
 msquic = ["h3-util/msquic"]
+msquic-async = ["h3-util/msquic-async"]
 s2n-quic = ["h3-util/s2n-quic"]
 quiche = ["h3-util/quiche"]
 

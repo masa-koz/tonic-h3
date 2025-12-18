@@ -14,6 +14,7 @@ keywords = ["http", "h3"]
 default = []
 quinn = ["dep:h3-quinn"]
 msquic = ["dep:msquic-h3"]
+msquic-async = ["dep:h3-msquic-async"]
 s2n-quic = ["dep:s2n-quic"]
 quiche = ["dep:tokio-quiche"]
 tracing = []
@@ -29,6 +30,7 @@ hyper-util.workspace = true
 bytes.workspace = true
 
 h3-quinn = { workspace = true, optional = true }
+h3-msquic-async = { workspace = true, optional = true }
 msquic-h3 = { workspace = true, optional = true }
 s2n-quic = { workspace = true, optional = true }
 tokio-quiche = { workspace = true, optional = true }
