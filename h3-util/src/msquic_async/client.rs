@@ -42,6 +42,7 @@ impl H3Connector for H3MsQuicAsyncConnector {
     type BS = h3_msquic_async::BidiStream<Bytes>;
     async fn connect(&self) -> Result<Self::CONN, crate::Error> {
         let conn = msquic_async::Connection::new(self.reg.as_ref().unwrap())?;
+        conn.set_share_binding(true)?;
         conn.start(
             self.config.as_ref().unwrap(),
             self.uri.host().unwrap(),
