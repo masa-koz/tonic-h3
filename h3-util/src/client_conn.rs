@@ -5,6 +5,7 @@ use hyper::{
     body::{Body, Bytes},
     rt::Executor,
 };
+use std::future::Future;
 
 use crate::client_body::H3IncomingClient;
 
@@ -22,20 +23,45 @@ where
     let (parts, body) = req.into_parts();
     let head_req = hyper::Request::from_parts(parts, ());
     // send header
-    tracing::debug!("sending h3 req header: {:?}", head_req);
+    tracing::trace!("sending h3 req header: {:?}", head_req);
 
     // send header.
     let stream = send_request.send_request(head_req).await?;
 
-    let (mut w, mut r) = stream.split();
-    // send body in backgound
-    executor.execute(async move {
-        // TODO: cancellation?
-        let _ = crate::client_body::send_h3_client_body::<CONN::BS, _>(&mut w, body).await;
-    });
+    let (w, mut r) = stream.split();
+
+    // Cancellation: cancel_tx is stored in H3IncomingClient.
+    // When the response body is dropped, cancel_tx drops, triggering cancellation.
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+
+    // Build the body send future with owned w and cancel support.
+    let mut body_fut = Box::pin(crate::client_body::send_h3_client_body::<CONN::BS, _>(
+        w, body, cancel_rx,
+    ));
+
+    // Eager poll: try to complete body send without spawning a task.
+    match futures::future::poll_fn(|cx| match body_fut.as_mut().poll(cx) {
+        std::task::Poll::Ready(res) => std::task::Poll::Ready(Some(res)),
+        std::task::Poll::Pending => std::task::Poll::Ready(None),
+    })
+    .await
+    {
+        Some(res) => {
+            // Body completed synchronously — no spawn needed.
+            res?;
+        }
+        None => {
+            // Body still pending — move to background task.
+            executor.execute(async move {
+                if let Err(e) = body_fut.await {
+                    tracing::warn!("h3 client body send failed: {e}");
+                }
+            });
+        }
+    };
 
     // return resp.
-    tracing::debug!("recv header");
+    tracing::trace!("recv header");
     let (resp, _) = r
         .recv_response()
         .await
@@ -43,8 +69,8 @@ where
             tracing::error!("recv header error: {e}");
         })?
         .into_parts();
-    let resp_body = H3IncomingClient::new(r);
-    tracing::debug!("return resp");
+    let resp_body = H3IncomingClient::new(r, Some(cancel_tx));
+    tracing::trace!("return resp");
     Ok(hyper::Response::from_parts(resp, resp_body))
 }
 
@@ -106,7 +132,7 @@ where
             // check if the driver is still running
             match rx.try_recv() {
                 Ok(()) => {
-                    tracing::debug!("driver is closed, reconnecting.");
+                    tracing::trace!("driver is closed, reconnecting.");
                     self.send_request = None;
                     self.driver_rx = None;
                 }
@@ -114,7 +140,7 @@ where
                     // driver is still running
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                    tracing::debug!("driver is closed, reconnecting.");
+                    tracing::trace!("driver is closed, reconnecting.");
                     self.send_request = None;
                     self.driver_rx = None;
                 }
@@ -123,7 +149,7 @@ where
 
         // ready for send.
         if self.send_request.is_some() {
-            tracing::debug!("exp poll_ready cache hit.");
+            tracing::trace!("exp poll_ready cache hit.");
             assert!(self.make_send_request_fut.is_none());
             assert!(self.driver_rx.is_some());
             return std::task::Poll::Ready(Ok(()));
@@ -139,7 +165,7 @@ where
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 executor.execute(async move {
                     let res = std::future::poll_fn(|cx| driver.poll_close(cx)).await;
-                    tracing::debug!("h3 driver ended: {res:?}");
+                    tracing::trace!("h3 driver ended: {res:?}");
                     let _ = tx.send(());
                 });
                 Ok((send_request, rx))
@@ -156,7 +182,10 @@ where
                     self.make_send_request_fut = None;
                     Ok(())
                 }
-                Err(e) => Err(e),
+                Err(e) => {
+                    self.make_send_request_fut = None;
+                    Err(e)
+                }
             })
     }
 

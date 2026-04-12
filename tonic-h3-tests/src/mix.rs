@@ -4,16 +4,19 @@ use tokio_util::sync::CancellationToken;
 use tonic::transport::Uri;
 
 #[tokio::test]
+#[test_log::test]
 async fn h3_quinn_test() {
     h3_test(crate::run_test_quinn_hello_server).await;
 }
 
 #[tokio::test]
+#[test_log::test]
 async fn h3_s2n_test() {
     h3_test(crate::run_test_s2n_server).await;
 }
 
 #[tokio::test]
+#[test_log::test]
 async fn msquic_test() {
     h3_test(crate::msquic_util::run_test_msquic_server).await;
 }
@@ -23,8 +26,6 @@ async fn msquic_test() {
 async fn h3_test(
     run_server: fn(SocketAddr, CancellationToken) -> (tokio::task::JoinHandle<()>, SocketAddr),
 ) {
-    crate::try_setup_tracing();
-
     let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
     let token = CancellationToken::new();
     let (h_svr, listen_addr) = run_server(addr, token.clone());
@@ -64,6 +65,53 @@ async fn h3_test(
             let response = client.say_hello(request).await.unwrap();
 
             tracing::debug!("RESPONSE={:?}", response);
+        }
+        // server streaming test
+        {
+            let request = tonic::Request::new(crate::HelloRequest {
+                name: "StreamTonic".into(),
+            });
+            let response = client.say_hello_server_stream(request).await.unwrap();
+            let mut stream = response.into_inner();
+            let mut count = 0;
+            while let Some(reply) = stream.message().await.unwrap() {
+                tracing::debug!("SERVER_STREAM RESPONSE={:?}", reply);
+                count += 1;
+            }
+            assert_eq!(count, 3);
+        }
+        // client streaming test
+        {
+            let requests = futures::stream::iter(vec![
+                crate::HelloRequest {
+                    name: "Client1".into(),
+                },
+                crate::HelloRequest {
+                    name: "Client2".into(),
+                },
+            ]);
+            let response = client.say_hello_client_stream(requests).await.unwrap();
+            tracing::debug!("CLIENT_STREAM RESPONSE={:?}", response);
+            assert!(response.into_inner().message.contains("Client1"));
+        }
+        // bidi streaming test
+        {
+            let requests = futures::stream::iter(vec![
+                crate::HelloRequest {
+                    name: "Bidi1".into(),
+                },
+                crate::HelloRequest {
+                    name: "Bidi2".into(),
+                },
+            ]);
+            let response = client.say_hello_bidi_stream(requests).await.unwrap();
+            let mut stream = response.into_inner();
+            let mut count = 0;
+            while let Some(reply) = stream.message().await.unwrap() {
+                tracing::debug!("BIDI_STREAM RESPONSE={:?}", reply);
+                count += 1;
+            }
+            assert_eq!(count, 2);
         }
     }
     tracing::debug!("client wait idle");

@@ -9,6 +9,7 @@ async fn root() -> &'static str {
 }
 
 #[tokio::test]
+#[test_log::test]
 async fn axum_test() {
     let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
 
@@ -52,7 +53,7 @@ async fn axum_test() {
         let resp = client.send(req).await.unwrap();
         use http_body_util::BodyExt;
         let data = resp.into_body().collect().await.unwrap().to_bytes();
-        println!("Resp: {data:?}");
+        tracing::debug!("Resp: {data:?}");
     }
 
     token.cancel();
@@ -60,6 +61,7 @@ async fn axum_test() {
 }
 
 #[tokio::test]
+#[ignore = "requires external server"]
 async fn h2o_client_test() {
     // cloudflare does not work:
     // let uri =  http::Uri::from_static("https://cloudflare-quic.com:443/");
@@ -70,6 +72,7 @@ async fn h2o_client_test() {
 }
 
 #[tokio::test]
+#[ignore = "requires external server"]
 async fn apache_client_test() {
     let uri = Uri::from_static("https://docs.trafficserver.apache.org:443/");
     test_client(uri).await;
@@ -96,6 +99,6 @@ async fn test_client(uri: Uri) {
         let resp = client.send(req).await.unwrap();
         use http_body_util::BodyExt;
         let data = resp.into_body().collect().await.unwrap().to_bytes();
-        println!("Resp: {data:?}");
+        tracing::debug!("Resp: {data:?}");
     }
 }
