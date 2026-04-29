@@ -65,3 +65,58 @@ impl Drop for H3MsQuicAsyncConnector {
         tracing::debug!("H3MsQuicAsyncConnector dropped.");
     }
 }
+
+#[derive(Clone)]
+pub struct H3MsQuicAsyncQmuxConnector {
+    config: Option<Arc<msquic::Configuration>>,
+    reg: Option<Arc<msquic::Registration>>,
+    uri: Uri,
+    conn_sender: Option<mpsc::Sender<msquic_async::Connection>>,
+}
+
+impl H3MsQuicAsyncQmuxConnector {
+    pub fn new(
+        uri: Uri,
+        config: Arc<msquic::Configuration>,
+        reg: Arc<msquic::Registration>,
+    ) -> Self {
+        Self {
+            uri,
+            config: Some(config),
+            reg: Some(reg),
+            conn_sender: None,
+        }
+    }
+}
+
+impl H3Connector for H3MsQuicAsyncQmuxConnector {
+    type CONN = h3_msquic_async::Connection;
+    type OS = h3_msquic_async::OpenStreams;
+    type SS = h3_msquic_async::SendStream<Bytes>;
+    type RS = h3_msquic_async::RecvStream;
+    type BS = h3_msquic_async::BidiStream<Bytes>;
+    async fn connect(&self) -> Result<Self::CONN, crate::Error> {
+        let conn = msquic_async::Connection::new_qmux(self.reg.as_ref().unwrap())?;
+        conn.set_share_binding(true)?;
+        conn.start(
+            self.config.as_ref().unwrap(),
+            self.uri.host().unwrap(),
+            self.uri.port_u16().unwrap(),
+        )
+        .await?;
+        if let Some(sender) = self.conn_sender.as_ref() {
+            sender.send(conn.clone()).await?;
+        }
+        let h3_conn = h3_msquic_async::Connection::new(conn);
+        Ok(h3_conn)
+    }
+}
+
+impl Drop for H3MsQuicAsyncQmuxConnector {
+    fn drop(&mut self) {
+        tracing::debug!("H3MsQuicAsyncQmuxConnector dropping.");
+        self.config.take();
+        self.reg.take();
+        tracing::debug!("H3MsQuicAsyncQmuxConnector dropped.");
+    }
+}
