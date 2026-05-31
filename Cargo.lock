@@ -1217,6 +1217,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "h3-datagram"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d2c9f77921668673721ae40f17c729fc48b9e38a663858097cea547484fdf0f"
+dependencies = [
+ "bytes",
+ "h3",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "h3-msquic-async"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1225,6 +1236,7 @@ dependencies = [
  "bytes",
  "futures",
  "h3",
+ "h3-datagram",
  "msquic-async",
  "tokio",
  "tokio-util",
@@ -1840,6 +1852,7 @@ checksum = "bea65fda5241a20053862abd4fc4e8ce92a08b5471a3ce26714d02fe42ebd6f6"
 dependencies = [
  "bitflags",
  "c-types 4.0.0",
+ "cmake",
  "ctor 0.4.3",
  "libc",
  "socket2 0.5.10",
@@ -2997,12 +3010,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490dcfcbfef26be6800d11870ff2df8774fa6e86d047e3e8c8a76b25655e41ca"
 
 [[package]]
-name = "semver"
-version = "1.0.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
-
-[[package]]
 name = "seera-msquic"
 version = "2.6.0-beta2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3013,8 +3020,14 @@ dependencies = [
  "cmake",
  "ctor 0.6.3",
  "libc",
- "socket2 0.6.1",
+ "socket2 0.6.3",
 ]
+
+[[package]]
+name = "semver"
+version = "1.0.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 
 [[package]]
 name = "serde"
