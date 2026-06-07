@@ -5,8 +5,9 @@ package.edition = "2024"
 
 [workspace.dependencies]
 futures = "0.3"
-h3 = { version = "0.0.8" }
-h3-quinn = "0.0.10"
+#h3 = { version = "0.0.8" }
+h3 = { git = "https://github.com/hyperium/h3", rev = "refs/pull/340/head" }
+h3-quinn = { git = "https://github.com/hyperium/h3", rev = "refs/pull/340/head" }
 http = "1"
 hyper = { version = "1" , default-features = false}
 hyper-util = { version = "0.1", default-features = false, features = ["service", "tokio"] }
@@ -30,7 +31,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
 trait-variant = "0.1"
 s2n-quic = { version = "1", default-features = false, features = ["provider-tls-rustls", "provider-address-token-default"] }
 msquic-h3 = { version = "0.0.5", features = [] }
-h3-msquic-async = { version = "0.3.1", default-features = false, features = ["msquic-seera", "datagram"] }
+h3-msquic-async = { git = "https://github.com/masa-koz/msquic-async-rs.git", branch = "masa-koz/fix-h3-datagram", default-features = false, features = ["msquic-seera", "datagram"] }
 msquic = { version = "2.5.1-beta", default-features = false, features = ["src"] }
 
 axum = {version = "0.8", default-features = false}
