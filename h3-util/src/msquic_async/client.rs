@@ -46,7 +46,7 @@ impl H3Connector for H3MsQuicAsyncConnector {
         conn.start(
             self.config.as_ref().unwrap(),
             self.uri.host().unwrap(),
-            self.uri.port_u16().unwrap(),
+            self.uri.port_u16().unwrap_or(443),
         )
         .await?;
         if let Some(sender) = self.conn_sender.as_ref() {
