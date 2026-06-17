@@ -43,12 +43,27 @@ impl H3Connector for H3MsQuicAsyncConnector {
     async fn connect(&self) -> Result<Self::CONN, crate::Error> {
         let conn = msquic_async::Connection::new(self.reg.as_ref().unwrap())?;
         conn.set_share_binding(true)?;
-        conn.start(
-            self.config.as_ref().unwrap(),
-            self.uri.host().unwrap(),
-            self.uri.port_u16().unwrap_or(443),
-        )
-        .await?;
+        let conn = match conn
+            .start(
+                self.config.as_ref().unwrap(),
+                self.uri.host().unwrap(),
+                self.uri.port_u16().unwrap_or(443),
+            )
+            .await
+        {
+            Ok(_) => conn,
+            Err(e) => {
+                tracing::error!("Failed to start QUIC connection: {:?}", e);
+                let conn = msquic_async::Connection::new_qmux(self.reg.as_ref().unwrap())?;
+                conn.start(
+                    self.config.as_ref().unwrap(),
+                    self.uri.host().unwrap(),
+                    self.uri.port_u16().unwrap_or(443),
+                )
+                .await?;
+                conn
+            }
+        };
         if let Some(sender) = self.conn_sender.as_ref() {
             sender.send(conn.clone()).await?;
         }
