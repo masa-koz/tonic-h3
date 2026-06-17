@@ -19,13 +19,13 @@ impl H3MsQuicAsyncConnector {
     pub fn new(
         uri: Uri,
         config: Arc<msquic::Configuration>,
-        config_qmux: Arc<msquic::Configuration>,
+        config_qmux: Option<Arc<msquic::Configuration>>,
         reg: Arc<msquic::Registration>,
     ) -> Self {
         Self {
             uri,
             config: Some(config),
-            config_qmux: Some(config_qmux),
+            config_qmux,
             reg: Some(reg),
             conn_sender: None,
         }
