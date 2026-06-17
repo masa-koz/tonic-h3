@@ -9,6 +9,7 @@ use crate::client::H3Connector;
 #[derive(Clone)]
 pub struct H3MsQuicAsyncConnector {
     config: Option<Arc<msquic::Configuration>>,
+    config_qmux: Option<Arc<msquic::Configuration>>,
     reg: Option<Arc<msquic::Registration>>,
     uri: Uri,
     conn_sender: Option<mpsc::Sender<msquic_async::Connection>>,
@@ -18,11 +19,13 @@ impl H3MsQuicAsyncConnector {
     pub fn new(
         uri: Uri,
         config: Arc<msquic::Configuration>,
+        config_qmux: Arc<msquic::Configuration>,
         reg: Arc<msquic::Registration>,
     ) -> Self {
         Self {
             uri,
             config: Some(config),
+            config_qmux: Some(config_qmux),
             reg: Some(reg),
             conn_sender: None,
         }
@@ -56,7 +59,7 @@ impl H3Connector for H3MsQuicAsyncConnector {
                 tracing::error!("Failed to start QUIC connection: {:?}", e);
                 let conn = msquic_async::Connection::new_qmux(self.reg.as_ref().unwrap())?;
                 conn.start(
-                    self.config.as_ref().unwrap(),
+                    self.config_qmux.as_ref().unwrap(),
                     self.uri.host().unwrap(),
                     self.uri.port_u16().unwrap_or(443),
                 )
@@ -76,6 +79,7 @@ impl Drop for H3MsQuicAsyncConnector {
     fn drop(&mut self) {
         tracing::debug!("H3MsQuicAsyncConnector dropping.");
         self.config.take();
+        self.config_qmux.take();
         self.reg.take();
         tracing::debug!("H3MsQuicAsyncConnector dropped.");
     }
