@@ -31,7 +31,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
 trait-variant = "0.1"
 s2n-quic = { version = "1", default-features = false, features = ["provider-tls-rustls", "provider-address-token-default"] }
 msquic-h3 = { version = "0.0.5", features = [] }
-h3-msquic-async = { git = "https://github.com/masa-koz/msquic-async-rs.git", branch = "masa-koz/qmux-01-fix-h3-dgram", default-features = false, features = ["msquic-seera", "datagram"] }
+h3-msquic-async = { path = "../msquic-async-rs/h3-msquic-async", default-features = false, features = ["msquic-seera", "datagram"] }
 msquic = { version = "2.5.1-beta", default-features = false, features = ["src"] }
 
 axum = {version = "0.8", default-features = false}
