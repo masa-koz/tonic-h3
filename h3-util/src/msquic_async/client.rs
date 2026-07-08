@@ -46,6 +46,8 @@ impl H3Connector for H3MsQuicAsyncConnector {
     async fn connect(&self) -> Result<Self::CONN, crate::Error> {
         let conn = msquic_async::Connection::new(self.reg.as_ref().unwrap())?;
         conn.set_share_binding(true)?;
+        let local_addr: std::net::SocketAddr = "192.168.0.12:0".parse()?;
+        conn.set_local_addr(local_addr)?;
         let conn = match conn
             .start(
                 self.config.as_ref().unwrap(),
