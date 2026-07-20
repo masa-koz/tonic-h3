@@ -56,10 +56,20 @@ impl H3Connector for H3MsQuicAsyncConnector {
         {
             Ok(_) => conn,
             Err(e) => {
-                tracing::error!("Failed to start QUIC connection: {:?}", e);
+                // The QMUX retry is only available when the caller supplied a
+                // QMUX configuration; without one there is nothing to fall back
+                // to, so surface the original start error instead of panicking.
+                let Some(config_qmux) = self.config_qmux.as_ref() else {
+                    tracing::error!("Failed to start QUIC connection: {:?}", e);
+                    return Err(e.into());
+                };
+                tracing::warn!(
+                    "Failed to start QUIC connection, retrying with QMUX: {:?}",
+                    e
+                );
                 let conn = msquic_async::Connection::new_qmux(self.reg.as_ref().unwrap())?;
                 conn.start(
-                    self.config_qmux.as_ref().unwrap(),
+                    config_qmux,
                     self.uri.host().unwrap(),
                     self.uri.port_u16().unwrap_or(443),
                 )
