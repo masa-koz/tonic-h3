@@ -10,7 +10,7 @@ use crate::client::H3Connector;
 pub struct H3MsQuicAsyncConnector {
     config: Option<Arc<msquic::Configuration>>,
     config_qmux: Option<Arc<msquic::Configuration>>,
-    reg: Option<Arc<msquic::Registration>>,
+    reg: Option<Arc<msquic_async::Registration>>,
     uri: Uri,
     conn_sender: Option<mpsc::Sender<msquic_async::Connection>>,
 }
@@ -20,7 +20,7 @@ impl H3MsQuicAsyncConnector {
         uri: Uri,
         config: Arc<msquic::Configuration>,
         config_qmux: Option<Arc<msquic::Configuration>>,
-        reg: Arc<msquic::Registration>,
+        reg: Arc<msquic_async::Registration>,
     ) -> Self {
         Self {
             uri,
