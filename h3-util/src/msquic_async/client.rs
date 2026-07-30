@@ -2,14 +2,15 @@ use h3_msquic_async::{msquic, msquic_async};
 use hyper::Uri;
 use hyper::body::Bytes;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::{net::UdpSocket, sync::mpsc};
 
-use crate::client::H3Connector;
+use crate::client::{H3Connector, dns_resolve};
 
 #[derive(Clone)]
 pub struct H3MsQuicAsyncConnector {
     config: Option<Arc<msquic::Configuration>>,
     config_qmux: Option<Arc<msquic::Configuration>>,
+    is_unconnected: bool,
     reg: Option<Arc<msquic_async::Registration>>,
     uri: Uri,
     conn_sender: Option<mpsc::Sender<msquic_async::Connection>>,
@@ -20,12 +21,14 @@ impl H3MsQuicAsyncConnector {
         uri: Uri,
         config: Arc<msquic::Configuration>,
         config_qmux: Option<Arc<msquic::Configuration>>,
+        is_unconnected: bool,
         reg: Arc<msquic_async::Registration>,
     ) -> Self {
         Self {
             uri,
             config: Some(config),
             config_qmux,
+            is_unconnected,
             reg: Some(reg),
             conn_sender: None,
         }
@@ -45,7 +48,24 @@ impl H3Connector for H3MsQuicAsyncConnector {
     type BS = h3_msquic_async::BidiStream<Bytes>;
     async fn connect(&self) -> Result<Self::CONN, crate::Error> {
         let conn = msquic_async::Connection::new(self.reg.as_ref().unwrap())?;
-        conn.set_share_binding(true)?;
+        if self.is_unconnected {
+            // Set the connection to be unconnected and share binding if needed
+            conn.set_share_binding(true)?;
+            conn.set_unconnected_socket(true)?;
+
+            // If the connector is unconnected, we need to resolve the address and connect the UDP socket
+            let addr = dns_resolve(&self.uri).await?.pop();
+            if let Some(addr) = addr {
+                let udp = if addr.is_ipv6() {
+                    UdpSocket::bind("[::]:0").await?
+                } else {
+                    UdpSocket::bind("0.0.0.0:0").await?
+                };
+                udp.connect(addr).await?;
+                let local_addr = udp.local_addr()?;
+                conn.set_local_addr(local_addr)?;
+            }
+        }
         let conn = match conn
             .start(
                 self.config.as_ref().unwrap(),
@@ -57,6 +77,9 @@ impl H3Connector for H3MsQuicAsyncConnector {
             Ok(_) => conn,
             Err(e) => {
                 tracing::error!("Failed to start QUIC connection: {:?}", e);
+                if self.config_qmux.is_none() {
+                    return Err(e.into());
+                }
                 let conn = msquic_async::Connection::new_qmux(self.reg.as_ref().unwrap())?;
                 conn.start(
                     self.config_qmux.as_ref().unwrap(),
