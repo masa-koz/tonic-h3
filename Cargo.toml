@@ -6,8 +6,8 @@ package.edition = "2024"
 [workspace.dependencies]
 futures = "0.3"
 #h3 = { version = "0.0.8" }
-h3 = { git = "https://github.com/hyperium/h3", rev = "385da3ad93407ec8eed15172f63561f6fb2bca40" }
-h3-quinn = { git = "https://github.com/hyperium/h3", rev = "385da3ad93407ec8eed15172f63561f6fb2bca40" }
+h3 = { git = "https://github.com/hyperium/h3", rev = "c916ed5af1c6818c74fb86cc05a18e51ecc1fcb1" }
+h3-quinn = { git = "https://github.com/hyperium/h3", rev = "c916ed5af1c6818c74fb86cc05a18e51ecc1fcb1" }
 http = "1"
 hyper = { version = "1" , default-features = false}
 hyper-util = { version = "0.1", default-features = false, features = ["service", "tokio"] }
