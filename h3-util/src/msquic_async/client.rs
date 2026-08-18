@@ -14,7 +14,30 @@ pub struct H3MsQuicAsyncConnector {
     reg: Option<Arc<msquic_async::Registration>>,
     uri: Uri,
     conn_sender: Option<mpsc::Sender<msquic_async::Connection>>,
+    peer_certificate: Option<PeerCertificateCallback>,
 }
+
+/// Called during the handshake with the peer's certificate, before this
+/// connector's connection is started.
+///
+/// The return status is the verdict, so `Err` fails the handshake. Set with
+/// [`H3MsQuicAsyncConnector::with_peer_certificate_callback`].
+///
+/// The callback the connection itself takes can only be installed before
+/// `start`, which happens inside [`H3Connector::connect`] — so a caller that
+/// needs to look at the certificate has no way to reach it without this. The
+/// channel from `with_channel` hands the connection out *after* the handshake,
+/// which is too late.
+pub type PeerCertificateCallback = Arc<
+    dyn Fn(
+            *mut std::ffi::c_void,
+            u32,
+            msquic::Status,
+            *mut std::ffi::c_void,
+        ) -> Result<(), msquic::Status>
+        + Send
+        + Sync,
+>;
 
 impl H3MsQuicAsyncConnector {
     pub fn new(
@@ -31,7 +54,18 @@ impl H3MsQuicAsyncConnector {
             is_unconnected,
             reg: Some(reg),
             conn_sender: None,
+            peer_certificate: None,
         }
+    }
+
+    /// Check the peer's certificate during the handshake.
+    ///
+    /// The credential has to carry `INDICATE_CERTIFICATE_RECEIVED` for this to
+    /// be called at all, and `USE_PORTABLE_CERTIFICATES` for the certificate to
+    /// arrive in a form that parses off Windows.
+    pub fn with_peer_certificate_callback(mut self, callback: PeerCertificateCallback) -> Self {
+        self.peer_certificate = Some(callback);
+        self
     }
 
     pub fn with_channel(mut self, sender: mpsc::Sender<msquic_async::Connection>) -> Self {
@@ -48,6 +82,11 @@ impl H3Connector for H3MsQuicAsyncConnector {
     type BS = h3_msquic_async::BidiStream<Bytes>;
     async fn connect(&self) -> Result<Self::CONN, crate::Error> {
         let conn = msquic_async::Connection::new(self.reg.as_ref().unwrap())?;
+        if let Some(callback) = self.peer_certificate.clone() {
+            conn.set_peer_certificate_received_callback(move |cert, flags, status, chain| {
+                callback(cert, flags, status, chain)
+            });
+        }
         if self.is_unconnected {
             // Set the connection to be unconnected and share binding if needed
             conn.set_share_binding(true)?;
@@ -81,6 +120,14 @@ impl H3Connector for H3MsQuicAsyncConnector {
                     return Err(e.into());
                 }
                 let conn = msquic_async::Connection::new_qmux(self.reg.as_ref().unwrap())?;
+                // The fallback connection is a different one, so it needs the
+                // callback too -- otherwise a peer that makes the first attempt
+                // fail gets an unchecked handshake on the second.
+                if let Some(callback) = self.peer_certificate.clone() {
+                    conn.set_peer_certificate_received_callback(move |cert, flags, status, chain| {
+                        callback(cert, flags, status, chain)
+                    });
+                }
                 conn.start(
                     self.config_qmux.as_ref().unwrap(),
                     self.uri.host().unwrap(),
