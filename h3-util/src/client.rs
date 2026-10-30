@@ -59,6 +59,33 @@ pub async fn dns_resolve(uri: &Uri) -> std::io::Result<Vec<SocketAddr>> {
     }
 }
 
+/// The first of `addrs`, in the order given, that this host can route to,
+/// with a UDP socket already connected to it -- whose `local_addr()` is the
+/// address the OS would send from.
+///
+/// **Keep the resolver's order and take the first that works.** getaddrinfo
+/// sorts by RFC 6724, which puts a family this host cannot use last; on a
+/// single-stack host a name with both A and AAAA records therefore resolves
+/// with the unusable family at the end. Whether a family is usable is what a
+/// UDP `connect` answers: it sends nothing, and fails at once (ENETUNREACH,
+/// EHOSTUNREACH) when there is no route.
+pub async fn first_routable(
+    addrs: impl IntoIterator<Item = SocketAddr>,
+) -> Option<(SocketAddr, tokio::net::UdpSocket)> {
+    for addr in addrs {
+        let bound = if addr.is_ipv6() {
+            tokio::net::UdpSocket::bind("[::]:0").await
+        } else {
+            tokio::net::UdpSocket::bind("0.0.0.0:0").await
+        };
+        let Ok(udp) = bound else { continue };
+        if udp.connect(addr).await.is_ok() {
+            return Some((addr, udp));
+        }
+    }
+    None
+}
+
 /// Cloneable http3 client channel, which can be used to enable multiplexing requests.
 pub struct H3Channel<C, B>
 where
