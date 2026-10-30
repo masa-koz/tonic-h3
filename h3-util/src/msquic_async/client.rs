@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use crate::client::{H3Connector, dns_resolve, first_routable};
+use crate::client::{AddressFamily, H3Connector, dns_resolve, first_routable, prefer_family};
 
 /// Whether `addr` falls in `192.0.0.0/29`, the IANA "IPv4 Service Continuity
 /// Prefix" (RFC 7335, reassigned from RFC 6333's original DS-Lite
@@ -50,6 +50,7 @@ pub struct H3MsQuicAsyncConnector {
     uri: Uri,
     conn_sender: Option<mpsc::Sender<msquic_async::Connection>>,
     peer_certificate: Option<PeerCertificateCallback>,
+    preferred_family: Option<AddressFamily>,
 }
 
 /// Called during the handshake with the peer's certificate, before this
@@ -90,6 +91,7 @@ impl H3MsQuicAsyncConnector {
             reg: Some(reg),
             conn_sender: None,
             peer_certificate: None,
+            preferred_family: None,
         }
     }
 
@@ -100,6 +102,25 @@ impl H3MsQuicAsyncConnector {
     /// arrive in a form that parses off Windows.
     pub fn with_peer_certificate_callback(mut self, callback: PeerCertificateCallback) -> Self {
         self.peer_certificate = Some(callback);
+        self
+    }
+
+    /// Try this IP family first when the name resolves to both.
+    ///
+    /// **Only an unconnected connection can honour it**, because only there
+    /// does this connector pick the address at all: with `is_unconnected`
+    /// false, msquic resolves the host itself in `start` and nothing here is
+    /// consulted. That is also the case where it matters — an unconnected
+    /// connection is the one a direct path is opened from, and a direct path
+    /// needs both ends on the same family to have anything to aim at.
+    ///
+    /// A preference, not a requirement: if nothing in the named family has a
+    /// route, the others are still tried (see
+    /// [`prefer_family`](crate::client::prefer_family)). A caller that chose a
+    /// family from a measurement taken earlier should not lose the connection
+    /// because the route changed since.
+    pub fn with_preferred_address_family(mut self, family: AddressFamily) -> Self {
+        self.preferred_family = Some(family);
         self
     }
 
@@ -137,7 +158,15 @@ impl H3Connector for H3MsQuicAsyncConnector {
             // single-stack host is exactly the family it cannot use whenever
             // the name has both A and AAAA -- and the `connect` failing there
             // ended the leg before the QMUX fallback could run.
-            let picked = first_routable(dns_resolve(&self.uri).await?).await;
+            let addrs = dns_resolve(&self.uri).await?;
+            // The caller's family, if it named one, goes to the front -- so it
+            // is what gets used whenever it still routes, and the others are
+            // the fallback rather than the failure.
+            let addrs = match self.preferred_family {
+                Some(family) => prefer_family(addrs, family),
+                None => addrs,
+            };
+            let picked = first_routable(addrs).await;
             if let Some((addr, udp)) = picked {
                 let local_addr = udp.local_addr()?;
                 if is_clat_stub(&local_addr) {

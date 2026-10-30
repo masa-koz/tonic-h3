@@ -86,6 +86,56 @@ pub async fn first_routable(
     None
 }
 
+/// Which IP family a connection should prefer when the name resolves to both.
+///
+/// **A preference, not a requirement** -- see [`prefer_family`]. A caller that
+/// knows which family the far side will be using wants that one tried first;
+/// it does not want the connection to fail if the answer has gone stale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddressFamily {
+    V4,
+    V6,
+}
+
+impl AddressFamily {
+    /// Whether `addr` is of this family.
+    ///
+    /// Compared on the address as it came out of the resolver: an `A` record
+    /// is V4 and an `AAAA` is V6. An IPv4-mapped `::ffff:a.b.c.d` counts as V6
+    /// here, which is what it is on the wire — resolvers do not hand those
+    /// back for a name, so the case does not arise in practice, and guessing
+    /// at intent would be the less predictable answer.
+    pub fn holds(&self, addr: &SocketAddr) -> bool {
+        match self {
+            Self::V4 => addr.is_ipv4(),
+            Self::V6 => addr.is_ipv6(),
+        }
+    }
+}
+
+/// `addrs` with `family` moved to the front, keeping the resolver's order
+/// within each group.
+///
+/// **Reordering rather than filtering, deliberately.** What a caller wants is
+/// "use this family, because the peer is", and what it must not get is a
+/// connection that fails because the family it named stopped working since it
+/// was chosen. Handing the reordered list to [`first_routable`] gives both in
+/// one pass: every address of the preferred family is tried, in order, before
+/// any other is — and if none of them routes, the rest still are. Filtering
+/// and then falling back to the unfiltered list would have the same outcome
+/// and probe twice.
+pub fn prefer_family(
+    addrs: impl IntoIterator<Item = SocketAddr>,
+    family: AddressFamily,
+) -> Vec<SocketAddr> {
+    // `partition` keeps the relative order inside each half, which is what
+    // makes this a reordering and not a re-ranking: RFC 6724 already sorted
+    // within a family and that ordering is worth keeping.
+    let (preferred, rest): (Vec<_>, Vec<_>) =
+        addrs.into_iter().partition(|addr| family.holds(addr));
+    preferred.into_iter().chain(rest).collect()
+}
+
 /// Cloneable http3 client channel, which can be used to enable multiplexing requests.
 pub struct H3Channel<C, B>
 where
