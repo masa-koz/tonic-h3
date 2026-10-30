@@ -3,9 +3,9 @@ use hyper::Uri;
 use hyper::body::Bytes;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::{net::UdpSocket, sync::mpsc};
+use tokio::sync::mpsc;
 
-use crate::client::{H3Connector, dns_resolve};
+use crate::client::{H3Connector, dns_resolve, first_routable};
 
 /// Whether `addr` falls in `192.0.0.0/29`, the IANA "IPv4 Service Continuity
 /// Prefix" (RFC 7335, reassigned from RFC 6333's original DS-Lite
@@ -130,14 +130,15 @@ impl H3Connector for H3MsQuicAsyncConnector {
             // does not work through it (see `is_clat_stub`). Deciding first
             // is what lets that case fall through to an ordinary connected
             // socket instead, rather than one already set up to fail.
-            let addr = dns_resolve(&self.uri).await?.pop();
-            if let Some(addr) = addr {
-                let udp = if addr.is_ipv6() {
-                    UdpSocket::bind("[::]:0").await?
-                } else {
-                    UdpSocket::bind("0.0.0.0:0").await?
-                };
-                udp.connect(addr).await?;
+            //
+            // Which address, and the local one with it, is `first_routable`'s
+            // answer: the resolver's order, first address that has a route.
+            // This used to be the *last* answer (`pop()`), which on a
+            // single-stack host is exactly the family it cannot use whenever
+            // the name has both A and AAAA -- and the `connect` failing there
+            // ended the leg before the QMUX fallback could run.
+            let picked = first_routable(dns_resolve(&self.uri).await?).await;
+            if let Some((addr, udp)) = picked {
                 let local_addr = udp.local_addr()?;
                 if is_clat_stub(&local_addr) {
                     // Falls through to the plain `conn.start()` below with
@@ -157,6 +158,13 @@ impl H3Connector for H3MsQuicAsyncConnector {
                     conn.set_share_binding(true)?;
                     conn.set_unconnected_socket(true)?;
                     conn.set_local_addr(local_addr)?;
+                    // The local address was chosen for `addr`'s family, so
+                    // the connection must go to `addr` too. Left to resolve
+                    // the host itself in `start`, msquic makes its own pick,
+                    // which need not be this one: with A and AAAA records a
+                    // v4 local address ended up facing a v6 peer, and the
+                    // handshake timed out without a packet on the wire.
+                    conn.set_remote_addr(addr)?;
                 }
             }
         }
@@ -179,9 +187,9 @@ impl H3Connector for H3MsQuicAsyncConnector {
                 // callback too -- otherwise a peer that makes the first attempt
                 // fail gets an unchecked handshake on the second.
                 if let Some(callback) = self.peer_certificate.clone() {
-                    conn.set_peer_certificate_received_callback(move |cert, flags, status, chain| {
-                        callback(cert, flags, status, chain)
-                    });
+                    conn.set_peer_certificate_received_callback(
+                        move |cert, flags, status, chain| callback(cert, flags, status, chain),
+                    );
                 }
                 conn.start(
                     self.config_qmux.as_ref().unwrap(),
