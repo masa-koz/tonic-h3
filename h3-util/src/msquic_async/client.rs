@@ -1,44 +1,77 @@
 use h3_msquic_async::{msquic, msquic_async};
 use hyper::Uri;
 use hyper::body::Bytes;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use crate::client::{AddressFamily, H3Connector, dns_resolve, first_routable, prefer_family};
+use crate::client::{
+    AddressFamily, H3Connector, dns_resolve, first_routable, is_clat_stub, prefer_family,
+};
 
-/// Whether `addr` falls in `192.0.0.0/29`, the IANA "IPv4 Service Continuity
-/// Prefix" (RFC 7335, reassigned from RFC 6333's original DS-Lite
-/// reservation). On an IPv6-only network, Android runs a local NAT64
-/// translator (`clatd`, "464XLAT"/CLAT) that presents an address in this
-/// range so IPv4-only sockets keep working, silently rewriting their traffic
-/// onto the real IPv6 uplink; a DS-Lite CPE's B4 address (192.0.0.2) is drawn
-/// from the same /29 and behaves the same way for this connector's purposes.
+/// Which socket mode the connector settled on for one connection, and why.
 ///
-/// **Why this connector cares**: a plain connected socket gets associated
-/// with the translator's path at `connect()` time and works fine through it.
-/// The unconnected/shared-binding socket this connector sets up for direct-
-/// path migration is only ever `bind()`-ed and driven with `sendto()` per
-/// packet -- and empirically (isekai-link#213: reconnects over an IPv6-only
-/// cellular network consistently failed, `ConnectionLost(ShutdownByTransport)`
-/// with `QUIC_STATUS_ABORTED`/`QUIC_STATUS_CONNECTION_IDLE`, while an ordinary
-/// connected socket to the identical address succeeded every time) that mode
-/// does not reliably route through the translator. The exact kernel
-/// mechanism is unconfirmed; the address is the one repeatable signal that
-/// this is about to happen.
-fn is_clat_stub(addr: &SocketAddr) -> bool {
-    let ip = match addr.ip() {
-        std::net::IpAddr::V4(ip) => ip,
-        // `to_ipv4_mapped` only unwraps genuine `::ffff:a.b.c.d` addresses --
-        // unlike `to_ipv4`, it does not also match IPv4-*compatible*
-        // addresses (`::a.b.c.d`), which would make `::192.0.0.4` match too.
-        std::net::IpAddr::V6(ip) => match ip.to_ipv4_mapped() {
-            Some(ip) => ip,
-            None => return false,
-        },
-    };
-    let [a, b, c, d] = ip.octets();
-    a == 192 && b == 0 && c == 0 && (d & 0xF8) == 0
+/// **Asking for an unconnected socket is not getting one.** `is_unconnected`
+/// is a request, and [`H3Connector::connect`] has three ways of answering it
+/// with an ordinary connected socket instead — each of them right for the
+/// connection, and each of them silent until now. A caller that only needs to
+/// *connect* can ignore this. A caller measuring what a future unconnected
+/// connection will be able to do cannot: measured on a connected socket, the
+/// answer is about a mode the next leg will not be in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binding {
+    /// An unconnected, shared binding pinned to the address that was picked —
+    /// what `is_unconnected` asks for, and the only mode a direct path can be
+    /// opened from.
+    Unconnected,
+    /// An ordinary connected socket, for the reason given.
+    Connected(Connected),
+}
+
+/// Why a connection ended up on a connected socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Connected {
+    /// Nothing else was asked for: `is_unconnected` was false.
+    AsAsked,
+    /// Asked for unconnected, but the local address that would be used is a
+    /// CLAT/464XLAT translator stub, which that mode does not route through —
+    /// see [`is_clat_stub`](crate::client::is_clat_stub).
+    ClatStub,
+    /// Asked for unconnected, but no resolved address could be bound and
+    /// connected, so there was no local address to pin one to.
+    NoRoutableAddress,
+    /// The QUIC start failed and the QMUX configuration answered over TCP.
+    /// Never an unconnected UDP binding, whatever was asked for — and the
+    /// family preference does not reach it either, because that fallback
+    /// resolves the host itself.
+    QmuxFallback,
+}
+
+impl Binding {
+    /// Whether this really is an unconnected, shared binding.
+    pub fn is_unconnected(&self) -> bool {
+        matches!(self, Self::Unconnected)
+    }
+}
+
+/// One connection the connector established, with the mode it settled on.
+///
+/// Handed to the channel from [`H3MsQuicAsyncConnector::with_channel`] after
+/// the handshake.
+#[derive(Clone)]
+pub struct Established {
+    /// The connection, after its handshake.
+    pub conn: msquic_async::Connection,
+    /// The socket mode it ended up on — not necessarily the one asked for.
+    pub binding: Binding,
+}
+
+impl std::fmt::Debug for Established {
+    /// Without the connection, which is not `Debug`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Established")
+            .field("binding", &self.binding)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone)]
@@ -48,7 +81,7 @@ pub struct H3MsQuicAsyncConnector {
     is_unconnected: bool,
     reg: Option<Arc<msquic_async::Registration>>,
     uri: Uri,
-    conn_sender: Option<mpsc::Sender<msquic_async::Connection>>,
+    conn_sender: Option<mpsc::Sender<Established>>,
     peer_certificate: Option<PeerCertificateCallback>,
     preferred_family: Option<AddressFamily>,
 }
@@ -124,7 +157,13 @@ impl H3MsQuicAsyncConnector {
         self
     }
 
-    pub fn with_channel(mut self, sender: mpsc::Sender<msquic_async::Connection>) -> Self {
+    /// Hand each established connection out, with the [`Binding`] the
+    /// connector settled on.
+    ///
+    /// After the handshake, so it is too late to inspect the certificate —
+    /// [`with_peer_certificate_callback`](Self::with_peer_certificate_callback)
+    /// is for that.
+    pub fn with_channel(mut self, sender: mpsc::Sender<Established>) -> Self {
         self.conn_sender = Some(sender);
         self
     }
@@ -143,6 +182,10 @@ impl H3Connector for H3MsQuicAsyncConnector {
                 callback(cert, flags, status, chain)
             });
         }
+        // Which of the four answers this connection got, reported on the
+        // channel below. Every branch that leaves `is_unconnected` unhonoured
+        // sets it, so a caller never has to infer the mode from the addresses.
+        let mut binding = Binding::Connected(Connected::AsAsked);
         if self.is_unconnected {
             // Resolve the address and discover which local address the OS
             // would use to reach it *before* touching the connection's
@@ -170,6 +213,7 @@ impl H3Connector for H3MsQuicAsyncConnector {
             if let Some((addr, udp)) = picked {
                 let local_addr = udp.local_addr()?;
                 if is_clat_stub(&local_addr) {
+                    binding = Binding::Connected(Connected::ClatStub);
                     // Falls through to the plain `conn.start()` below with
                     // none of the unconnected/shared-binding calls made --
                     // the same path a non-unconnected caller already takes
@@ -184,6 +228,7 @@ impl H3Connector for H3MsQuicAsyncConnector {
                          until the next reconnect off this network)"
                     );
                 } else {
+                    binding = Binding::Unconnected;
                     conn.set_share_binding(true)?;
                     conn.set_unconnected_socket(true)?;
                     conn.set_local_addr(local_addr)?;
@@ -195,6 +240,21 @@ impl H3Connector for H3MsQuicAsyncConnector {
                     // handshake timed out without a packet on the wire.
                     conn.set_remote_addr(addr)?;
                 }
+            } else {
+                // **Said out loud, where it used to be silent.** Nothing could
+                // be bound and connected, so there is no local address to pin
+                // and this falls through to the plain `start()` below with
+                // msquic resolving the host itself -- which means the family
+                // preference is not applied either. The addresses it ends up
+                // on look entirely ordinary, so without this line the mode is
+                // invisible to a caller and to whoever reads the log.
+                binding = Binding::Connected(Connected::NoRoutableAddress);
+                tracing::warn!(
+                    uri = %self.uri,
+                    "no resolved address could be bound and connected; falling back to a \
+                     connected socket and letting msquic resolve the host (no direct-path \
+                     migration, and the address family preference is not applied)"
+                );
             }
         }
         let conn = match conn
@@ -226,11 +286,18 @@ impl H3Connector for H3MsQuicAsyncConnector {
                     self.uri.port_u16().unwrap_or(443),
                 )
                 .await?;
+                // TCP, so whatever was asked for upstairs no longer applies.
+                binding = Binding::Connected(Connected::QmuxFallback);
                 conn
             }
         };
         if let Some(sender) = self.conn_sender.as_ref() {
-            sender.send(conn.clone()).await?;
+            sender
+                .send(Established {
+                    conn: conn.clone(),
+                    binding,
+                })
+                .await?;
         }
         let h3_conn = h3_msquic_async::Connection::new(conn);
         Ok(h3_conn)
