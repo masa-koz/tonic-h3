@@ -137,6 +137,40 @@ pub fn prefer_family(
 }
 
 /// Cloneable http3 client channel, which can be used to enable multiplexing requests.
+/// Whether `addr` falls in `192.0.0.0/29`, the IANA "IPv4 Service Continuity
+/// Prefix" (RFC 7335, reassigned from RFC 6333's original DS-Lite
+/// reservation). On an IPv6-only network, Android runs a local NAT64
+/// translator (`clatd`, "464XLAT"/CLAT) that presents an address in this
+/// range so IPv4-only sockets keep working, silently rewriting their traffic
+/// onto the real IPv6 uplink; a DS-Lite CPE's B4 address (192.0.0.2) is drawn
+/// from the same /29 and behaves the same way for this connector's purposes.
+///
+/// **Why a connector cares**: a plain connected socket gets associated
+/// with the translator's path at `connect()` time and works fine through it.
+/// The unconnected/shared-binding socket this connector sets up for direct-
+/// path migration is only ever `bind()`-ed and driven with `sendto()` per
+/// packet -- and empirically (isekai-link#213: reconnects over an IPv6-only
+/// cellular network consistently failed, `ConnectionLost(ShutdownByTransport)`
+/// with `QUIC_STATUS_ABORTED`/`QUIC_STATUS_CONNECTION_IDLE`, while an ordinary
+/// connected socket to the identical address succeeded every time) that mode
+/// does not reliably route through the translator. The exact kernel
+/// mechanism is unconfirmed; the address is the one repeatable signal that
+/// this is about to happen.
+pub fn is_clat_stub(addr: &SocketAddr) -> bool {
+    let ip = match addr.ip() {
+        std::net::IpAddr::V4(ip) => ip,
+        // `to_ipv4_mapped` only unwraps genuine `::ffff:a.b.c.d` addresses --
+        // unlike `to_ipv4`, it does not also match IPv4-*compatible*
+        // addresses (`::a.b.c.d`), which would make `::192.0.0.4` match too.
+        std::net::IpAddr::V6(ip) => match ip.to_ipv4_mapped() {
+            Some(ip) => ip,
+            None => return false,
+        },
+    };
+    let [a, b, c, d] = ip.octets();
+    a == 192 && b == 0 && c == 0 && (d & 0xF8) == 0
+}
+
 pub struct H3Channel<C, B>
 where
     C: H3Connector,
