@@ -136,7 +136,6 @@ pub fn prefer_family(
     preferred.into_iter().chain(rest).collect()
 }
 
-/// Cloneable http3 client channel, which can be used to enable multiplexing requests.
 /// Whether `addr` falls in `192.0.0.0/29`, the IANA "IPv4 Service Continuity
 /// Prefix" (RFC 7335, reassigned from RFC 6333's original DS-Lite
 /// reservation). On an IPv6-only network, Android runs a local NAT64
@@ -171,6 +170,7 @@ pub fn is_clat_stub(addr: &SocketAddr) -> bool {
     a == 192 && b == 0 && c == 0 && (d & 0xF8) == 0
 }
 
+/// Cloneable http3 client channel, which can be used to enable multiplexing requests.
 pub struct H3Channel<C, B>
 where
     C: H3Connector,
