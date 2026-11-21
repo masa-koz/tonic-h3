@@ -6,3 +6,4 @@ pub use client::{
 };
 
 pub use h3_msquic_async;
+pub use h3_msquic_async::msquic_async::LocalAddressPolicyAction;
