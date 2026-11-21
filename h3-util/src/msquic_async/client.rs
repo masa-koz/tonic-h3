@@ -1,6 +1,7 @@
 use h3_msquic_async::{msquic, msquic_async};
 use hyper::Uri;
 use hyper::body::Bytes;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -84,6 +85,7 @@ pub struct H3MsQuicAsyncConnector {
     conn_sender: Option<mpsc::Sender<Established>>,
     peer_certificate: Option<PeerCertificateCallback>,
     preferred_family: Option<AddressFamily>,
+    local_address_policies: Vec<(SocketAddr, u8)>,
 }
 
 /// Called during the handshake with the peer's certificate, before this
@@ -125,6 +127,7 @@ impl H3MsQuicAsyncConnector {
             conn_sender: None,
             peer_certificate: None,
             preferred_family: None,
+            local_address_policies: Vec::new(),
         }
     }
 
@@ -157,6 +160,38 @@ impl H3MsQuicAsyncConnector {
         self
     }
 
+    /// Keep these addresses out of the ones this connection picks for itself.
+    ///
+    /// Each entry is an address and a prefix length, excluded by
+    /// [`Connection::add_local_address_policy`] with
+    /// `LocalAddressPolicyAction::Exclude`. The port is ignored — a policy is
+    /// about addresses — so `SocketAddr::new(ip, 0)` is the usual way to write
+    /// one.
+    ///
+    /// **Why it has to be set here.** `AUTO` pairs every address the host has
+    /// with every remote the connection knows, so a management interface, a VPN
+    /// the peer cannot answer on, or a docker bridge becomes a path the stack
+    /// opens and cannot validate. A policy takes it out of that — but only
+    /// before the connection starts: `QuicConnAddLocalAddressPolicy` inserts the
+    /// rule and queues nothing, so one added later leaves the paths already
+    /// opened in place until some unrelated event triggers a reconciliation.
+    /// `start` happens inside [`H3Connector::connect`], which is why this is a
+    /// connector option and not something a caller does to the connection it
+    /// gets back — the same reason
+    /// [`with_peer_certificate_callback`](Self::with_peer_certificate_callback)
+    /// exists.
+    ///
+    /// An address the application names itself is unaffected, which includes the
+    /// local address an unconnected connection is pinned to here: a policy is
+    /// about automatic selection.
+    ///
+    /// MsQuic refuses a prefix longer than the family allows, a duplicate rule,
+    /// and more than 16 policies; those statuses come back from `connect`.
+    pub fn with_local_address_policies(mut self, policies: Vec<(SocketAddr, u8)>) -> Self {
+        self.local_address_policies = policies;
+        self
+    }
+
     /// Hand each established connection out, with the [`Binding`] the
     /// connector settled on.
     ///
@@ -177,6 +212,17 @@ impl H3Connector for H3MsQuicAsyncConnector {
     type BS = h3_msquic_async::BidiStream<Bytes>;
     async fn connect(&self) -> Result<Self::CONN, crate::Error> {
         let conn = msquic_async::Connection::new(self.reg.as_ref().unwrap())?;
+        // First, so that every path this connection ever opens for itself is
+        // decided with them in place --
+        // [`with_local_address_policies`](Self::with_local_address_policies)
+        // says why later is not good enough.
+        for (address, prefix_length) in &self.local_address_policies {
+            conn.add_local_address_policy(
+                *address,
+                *prefix_length,
+                msquic_async::LocalAddressPolicyAction::Exclude,
+            )?;
+        }
         if let Some(callback) = self.peer_certificate.clone() {
             conn.set_peer_certificate_received_callback(move |cert, flags, status, chain| {
                 callback(cert, flags, status, chain)
