@@ -1,6 +1,7 @@
 use h3_msquic_async::{msquic, msquic_async};
 use hyper::Uri;
 use hyper::body::Bytes;
+use msquic_async::LocalAddressPolicyAction;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -85,7 +86,7 @@ pub struct H3MsQuicAsyncConnector {
     conn_sender: Option<mpsc::Sender<Established>>,
     peer_certificate: Option<PeerCertificateCallback>,
     preferred_family: Option<AddressFamily>,
-    local_address_policies: Vec<(SocketAddr, u8)>,
+    local_address_policies: Vec<(SocketAddr, u8, LocalAddressPolicyAction)>,
 }
 
 /// Called during the handshake with the peer's certificate, before this
@@ -160,13 +161,16 @@ impl H3MsQuicAsyncConnector {
         self
     }
 
-    /// Keep these addresses out of the ones this connection picks for itself.
+    /// Apply these policies to the addresses this connection picks for itself.
     ///
-    /// Each entry is an address and a prefix length, excluded by
-    /// [`Connection::add_local_address_policy`] with
-    /// `LocalAddressPolicyAction::Exclude`. The port is ignored — a policy is
-    /// about addresses — so `SocketAddr::new(ip, 0)` is the usual way to write
-    /// one.
+    /// Each entry is an address, a prefix length and what to do with the
+    /// addresses that match, in the order
+    /// [`Connection::add_local_address_policy`](msquic_async::Connection::add_local_address_policy)
+    /// takes them; [`LocalAddressPolicyAction::Exclude`] keeps them from being
+    /// picked at all. The action is the caller's to name rather than fixed here
+    /// because the enum is `#[non_exhaustive]`: a new action then needs no new
+    /// signature. The port is ignored — a policy is about addresses — so
+    /// `SocketAddr::new(ip, 0)` is the usual way to write one.
     ///
     /// **Why it has to be set here.** `AUTO` pairs every address the host has
     /// with every remote the connection knows, so a management interface, a VPN
@@ -187,7 +191,10 @@ impl H3MsQuicAsyncConnector {
     ///
     /// MsQuic refuses a prefix longer than the family allows, a duplicate rule,
     /// and more than 16 policies; those statuses come back from `connect`.
-    pub fn with_local_address_policies(mut self, policies: Vec<(SocketAddr, u8)>) -> Self {
+    pub fn with_local_address_policies(
+        mut self,
+        policies: Vec<(SocketAddr, u8, LocalAddressPolicyAction)>,
+    ) -> Self {
         self.local_address_policies = policies;
         self
     }
@@ -216,12 +223,8 @@ impl H3Connector for H3MsQuicAsyncConnector {
         // decided with them in place --
         // [`with_local_address_policies`](Self::with_local_address_policies)
         // says why later is not good enough.
-        for (address, prefix_length) in &self.local_address_policies {
-            conn.add_local_address_policy(
-                *address,
-                *prefix_length,
-                msquic_async::LocalAddressPolicyAction::Exclude,
-            )?;
+        for &(address, prefix_length, action) in &self.local_address_policies {
+            conn.add_local_address_policy(address, prefix_length, action)?;
         }
         if let Some(callback) = self.peer_certificate.clone() {
             conn.set_peer_certificate_received_callback(move |cert, flags, status, chain| {
