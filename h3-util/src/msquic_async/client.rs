@@ -231,6 +231,28 @@ impl H3Connector for H3MsQuicAsyncConnector {
                 callback(cert, flags, status, chain)
             });
         }
+        // **Every connection, not only the unconnected ones.** A client that
+        // does not share its binding gets a *zero-length* source connection
+        // ID -- `ShareBinding ? MsQuicLib.CidTotalLength : 0`, in all three
+        // places `connection.c` builds one -- and a zero-length SCID cannot
+        // carry multipath, which needs a connection ID per path id to name a
+        // path with at all.
+        //
+        // msquic offers `initial_max_path_id` regardless:
+        // `ServerMigrationEnabled` refuses up front when the binding is not
+        // shared, with "Server migration requires non-zero length connection
+        // IDs", and `MultipathEnabled` twenty lines below it does not
+        // (seera-networks/msquic#221). So a server that negotiates multipath
+        // answers the first Initial with PROTOCOL_VIOLATION, and the
+        // connection falls back to QMUX over TCP -- seera-networks/ISEKAI-link#368,
+        // where the control-plane connection spent its whole life on TCP and
+        // the relay-RTT probe measured TCP rather than the UDP path a leg
+        // would use.
+        //
+        // What it costs is a few header bytes per packet. The unconnected
+        // branch below has always set it, which is why those connections --
+        // the relay legs -- negotiated multipath correctly all along.
+        conn.set_share_binding(true)?;
         // Which of the four answers this connection got, reported on the
         // channel below. Every branch that leaves `is_unconnected` unhonoured
         // sets it, so a caller never has to infer the mode from the addresses.
@@ -278,7 +300,9 @@ impl H3Connector for H3MsQuicAsyncConnector {
                     );
                 } else {
                     binding = Binding::Unconnected;
-                    conn.set_share_binding(true)?;
+                    // The shared binding `set_unconnected_socket` requires is
+                    // set above, for every connection now rather than only
+                    // here; the order it demands still holds.
                     conn.set_unconnected_socket(true)?;
                     conn.set_local_addr(local_addr)?;
                     // The local address was chosen for `addr`'s family, so
